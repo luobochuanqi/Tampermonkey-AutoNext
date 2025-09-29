@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         任务点完成后自动点击下一节
+// @name         任务点完成后自动点击下一节（修复版）
 // @namespace    http://tampermonkey.net/
-// @version      1.1
-// @description  当检测到任务点已完成元素时，自动点击下一节按钮
+// @version      1.2
+// @description  修复按钮点击无效问题，确保任务点完成后能触发下一节
 // @author       luobochuanqi
 // @match        https://mooc1.chaoxing.com/mycourse/*
 // @grant        none
@@ -12,26 +12,18 @@
 (function() {
     'use strict';
 
-    // -------------------------- 配置参数 --------------------------
-    // 任务点已完成元素选择器
+    // 配置参数
     const TASK_COMPLETE_SELECTOR = '.ans-job-icon.ans-job-icon-clear[id^="ext-gen"]';
-    // 任务点已完成的标识文本
     const TASK_COMPLETE_LABEL = "任务点已完成";
-    // 下一节按钮选择器
     const NEXT_BUTTON_SELECTOR = '#prevNextFocusNext';
-    // 状态检测间隔（毫秒）
     const CHECK_INTERVAL = 3000;
-    // 最大检测次数（防止无限循环，0表示不限制）
     const MAX_CHECK_TIMES = 0;
-    // --------------------------------------------------------------
 
     let checkCount = 0;
     let nextButtonElement = null;
     let checkTimer = null;
 
-    /**
-     * 带时间戳的日志输出
-     */
+    // 日志输出
     function log(message, type = 'info') {
         const timestamp = new Date().toLocaleTimeString();
         switch(type) {
@@ -46,69 +38,94 @@
         }
     }
 
-    /**
-     * 检查任务点是否已完成
-     */
+    // 检查任务点是否已完成
     function isTaskCompleted() {
         const taskElements = document.querySelectorAll(TASK_COMPLETE_SELECTOR);
-        
         for (let element of taskElements) {
-            // 检查元素是否包含任务点已完成的标识
             const ariaLabel = element.getAttribute('aria-label');
             if (ariaLabel && ariaLabel.includes(TASK_COMPLETE_LABEL)) {
                 log(`检测到任务点已完成元素: ${element.id}`);
                 return true;
             }
         }
-        
         return false;
     }
 
-    /**
-     * 获取下一节按钮元素
-     */
+    // 获取下一节按钮（增加重试机制）
     function getNextButton() {
-        if (!nextButtonElement) {
-            nextButtonElement = document.querySelector(NEXT_BUTTON_SELECTOR);
-            if (nextButtonElement) {
-                log('找到下一节按钮');
-            }
-        }
-        return nextButtonElement;
-    }
-
-    /**
-     * 尝试点击下一节按钮
-     */
-    function tryClickNextButton() {
-        const nextButton = getNextButton();
-        if (nextButton) {
-            try {
-                // 检查按钮是否可见且可点击
-                const isVisible = window.getComputedStyle(nextButton).display !== 'none';
-                if (isVisible && !nextButton.disabled) {
-                    nextButton.click();
-                    log('已自动点击下一节按钮');
-                    return true;
-                } else {
-                    log('下一节按钮不可见或不可点击', 'warn');
-                }
-            } catch (error) {
-                log(`点击下一节按钮时出错: ${error.message}`, 'error');
+        // 每次检查都重新获取按钮（防止按钮动态刷新后失效）
+        nextButtonElement = document.querySelector(NEXT_BUTTON_SELECTOR);
+        if (nextButtonElement) {
+            log(`找到下一节按钮，ID: ${nextButtonElement.id}`);
+            // 额外检查按钮的onclick事件是否存在
+            if (nextButtonElement.onclick) {
+                log(`按钮绑定的点击事件: ${nextButtonElement.onclick.toString().substring(0, 50)}...`);
+            } else {
+                log('按钮未绑定onclick事件', 'warn');
             }
         } else {
             log('未找到下一节按钮', 'warn');
         }
+        return nextButtonElement;
+    }
+
+    // 模拟真实点击（核心修复：替代直接click()）
+    function simulateClick(element) {
+        try {
+            // 1. 先尝试直接调用onclick绑定的函数（针对你的按钮特殊处理）
+            if (element.onclick) {
+                log('尝试直接调用onclick函数');
+                element.onclick(); // 直接执行按钮绑定的PCount.next()
+                return true;
+            }
+
+            // 2. 如果onclick调用失败，模拟真实鼠标事件（兼容性更强）
+            const clickEvent = new MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                view: window,
+                button: 0, // 左键点击
+                detail: 1 // 点击次数
+            });
+            const success = element.dispatchEvent(clickEvent);
+            if (success) {
+                log('模拟鼠标点击事件成功');
+                return true;
+            } else {
+                log('模拟鼠标点击事件被阻止', 'warn');
+                return false;
+            }
+        } catch (error) {
+            log(`点击模拟失败: ${error.message}`, 'error');
+            return false;
+        }
+    }
+
+    // 尝试点击下一节按钮（使用新的模拟点击方法）
+    function tryClickNextButton() {
+        const nextButton = getNextButton();
+        if (nextButton) {
+            try {
+                // 检查按钮可见性（你的按钮style是display: block，这里会通过）
+                const isVisible = window.getComputedStyle(nextButton).display !== 'none';
+                const isDisabled = nextButton.disabled;
+                
+                if (isVisible && !isDisabled) {
+                    log('按钮可见且可点击，准备触发点击');
+                    return simulateClick(nextButton); // 使用新的模拟点击函数
+                } else {
+                    log(`按钮状态异常: 可见=${isVisible}, 禁用=${isDisabled}`, 'warn');
+                }
+            } catch (error) {
+                log(`点击处理出错: ${error.message}`, 'error');
+            }
+        }
         return false;
     }
 
-    /**
-     * 定期检查任务点状态
-     */
+    // 定期检查任务点状态
     function checkTaskStatus() {
         checkCount++;
-        
-        // 检查是否达到最大检测次数
         if (MAX_CHECK_TIMES > 0 && checkCount >= MAX_CHECK_TIMES) {
             log(`已达到最大检测次数(${MAX_CHECK_TIMES})，停止检测`, 'warn');
             clearInterval(checkTimer);
@@ -117,11 +134,8 @@
         
         log(`正在检查任务点状态 (第${checkCount}次)`);
         
-        // 检查任务点是否已完成
         if (isTaskCompleted()) {
-            // 尝试点击下一节按钮
             if (tryClickNextButton()) {
-                // 点击成功后，延迟一段时间再继续检测（防止重复点击）
                 clearInterval(checkTimer);
                 setTimeout(() => {
                     log('重新开始检测任务点状态');
@@ -133,18 +147,16 @@
         }
     }
 
-    /**
-     * 初始化脚本
-     */
+    // 初始化脚本（增加延迟启动，确保页面完全加载）
     function init() {
-        log('脚本开始执行，将定期检查任务点状态');
-        // 立即执行一次检查
-        checkTaskStatus();
-        // 设置定时检查
-        checkTimer = setInterval(checkTaskStatus, CHECK_INTERVAL);
+        log('脚本开始执行，2秒后开始检查（等待页面完全加载）');
+        // 延迟2秒启动，避免页面未完全渲染导致元素获取失败
+        setTimeout(() => {
+            checkTaskStatus();
+            checkTimer = setInterval(checkTaskStatus, CHECK_INTERVAL);
+        }, 2000);
     }
 
-    // 启动脚本
     init();
 
 })();
