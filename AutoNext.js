@@ -1,128 +1,150 @@
 // ==UserScript==
-// @name         视频播放完自动点击下一节
+// @name         任务点完成后自动点击下一节
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  当特定视频播放器（id="video_html5_api"）播放结束后，自动点击“下一节”按钮（id="prevNextFocusNext"）
+// @version      1.1
+// @description  当检测到任务点已完成元素时，自动点击下一节按钮
 // @author       luobochuanqi
-// @match        https://mooc1.chaoxing.com/mycourse/studentstudy?*courseId=*&*chapterId=*
+// @match        https://mooc1.chaoxing.com/mycourse/*
 // @grant        none
-// @run-at       document-end  // 页面DOM加载完成后执行
+// @run-at       document-end
 // ==/UserScript==
 
 (function() {
     'use strict';
 
     // -------------------------- 配置参数 --------------------------
-    const VIDEO_SELECTOR = '#video_html5_api'; // 视频元素选择器（从提供的HTML中提取）
-    const NEXT_BUTTON_SELECTOR = '#prevNextFocusNext'; // 下一节按钮选择器（从提供的HTML中提取）
-    const CHECK_INTERVAL = 1000; // 元素检测间隔（毫秒），防止元素动态加载延迟
-    const MAX_CHECK_TIMES = 30; // 最大检测次数（避免无限循环）
+    // 任务点已完成元素选择器
+    const TASK_COMPLETE_SELECTOR = '.ans-job-icon.ans-job-icon-clear[id^="ext-gen"]';
+    // 任务点已完成的标识文本
+    const TASK_COMPLETE_LABEL = "任务点已完成";
+    // 下一节按钮选择器
+    const NEXT_BUTTON_SELECTOR = '#prevNextFocusNext';
+    // 状态检测间隔（毫秒）
+    const CHECK_INTERVAL = 3000;
+    // 最大检测次数（防止无限循环，0表示不限制）
+    const MAX_CHECK_TIMES = 0;
     // --------------------------------------------------------------
 
-    let checkCount = 0; // 元素检测计数器
-    let videoElement = null; // 视频元素缓存
-    let nextButtonElement = null; // 下一节按钮缓存
+    let checkCount = 0;
+    let nextButtonElement = null;
+    let checkTimer = null;
 
     /**
-     * 日志输出函数（带时间戳，方便调试）
-     * @param {string} message - 日志内容
-     * @param {string} type - 日志类型（info/warn/error）
+     * 带时间戳的日志输出
      */
     function log(message, type = 'info') {
         const timestamp = new Date().toLocaleTimeString();
         switch(type) {
             case 'warn':
-                console.warn(`[自动下一节][${timestamp}] ${message}`);
+                console.warn(`[任务点自动下一节][${timestamp}] ${message}`);
                 break;
             case 'error':
-                console.error(`[自动下一节][${timestamp}] ${message}`);
+                console.error(`[任务点自动下一节][${timestamp}] ${message}`);
                 break;
             default:
-                console.log(`[自动下一节][${timestamp}] ${message}`);
+                console.log(`[任务点自动下一节][${timestamp}] ${message}`);
         }
     }
 
     /**
-     * 检测并获取目标元素
-     * @param {string} selector - CSS选择器
-     * @param {string} elementName - 元素名称（用于日志）
-     * @returns {HTMLElement|null} 找到的元素或null
+     * 检查任务点是否已完成
      */
-    function getTargetElement(selector, elementName) {
-        const element = document.querySelector(selector);
-        if (element) {
-            log(`成功找到${elementName}（选择器：${selector}）`);
-            return element;
+    function isTaskCompleted() {
+        const taskElements = document.querySelectorAll(TASK_COMPLETE_SELECTOR);
+        
+        for (let element of taskElements) {
+            // 检查元素是否包含任务点已完成的标识
+            const ariaLabel = element.getAttribute('aria-label');
+            if (ariaLabel && ariaLabel.includes(TASK_COMPLETE_LABEL)) {
+                log(`检测到任务点已完成元素: ${element.id}`);
+                return true;
+            }
         }
-        log(`未找到${elementName}（选择器：${selector}），当前检测次数：${checkCount}/${MAX_CHECK_TIMES}`, 'warn');
-        return null;
+        
+        return false;
     }
 
     /**
-     * 初始化元素检测（处理动态加载的元素）
+     * 获取下一节按钮元素
      */
-    function initElementDetection() {
-        // 定期检测视频元素和按钮元素
-        const checkTimer = setInterval(() => {
-            checkCount++;
-
-            // 检测视频元素
-            if (!videoElement) {
-                videoElement = getTargetElement(VIDEO_SELECTOR, '视频播放器');
+    function getNextButton() {
+        if (!nextButtonElement) {
+            nextButtonElement = document.querySelector(NEXT_BUTTON_SELECTOR);
+            if (nextButtonElement) {
+                log('找到下一节按钮');
             }
+        }
+        return nextButtonElement;
+    }
 
-            // 检测下一节按钮
-            if (!nextButtonElement) {
-                nextButtonElement = getTargetElement(NEXT_BUTTON_SELECTOR, '下一节按钮');
-            }
-
-            // 两个元素都找到，或达到最大检测次数，停止检测
-            if ((videoElement && nextButtonElement) || checkCount >= MAX_CHECK_TIMES) {
-                clearInterval(checkTimer);
-
-                if (videoElement && nextButtonElement) {
-                    log('所有目标元素已就绪，开始监听视频播放状态');
-                    initVideoEndListener(); // 初始化视频结束监听
+    /**
+     * 尝试点击下一节按钮
+     */
+    function tryClickNextButton() {
+        const nextButton = getNextButton();
+        if (nextButton) {
+            try {
+                // 检查按钮是否可见且可点击
+                const isVisible = window.getComputedStyle(nextButton).display !== 'none';
+                if (isVisible && !nextButton.disabled) {
+                    nextButton.click();
+                    log('已自动点击下一节按钮');
+                    return true;
                 } else {
-                    log('达到最大检测次数，仍未找到所有目标元素，脚本停止', 'error');
+                    log('下一节按钮不可见或不可点击', 'warn');
                 }
+            } catch (error) {
+                log(`点击下一节按钮时出错: ${error.message}`, 'error');
             }
-        }, CHECK_INTERVAL);
+        } else {
+            log('未找到下一节按钮', 'warn');
+        }
+        return false;
     }
 
     /**
-     * 初始化视频结束事件监听
+     * 定期检查任务点状态
      */
-    function initVideoEndListener() {
-        // 监听视频的ended事件（播放结束时触发）
-        videoElement.addEventListener('ended', function() {
-            log('视频已播放结束，准备点击下一节按钮');
-            
-            // 再次确认按钮存在且可点击（防止按钮动态消失）
-            if (nextButtonElement && !nextButtonElement.disabled) {
-                try {
-                    // 触发按钮点击（模拟用户手动点击）
-                    nextButtonElement.click();
-                    log('成功点击下一节按钮');
-                } catch (error) {
-                    log(`点击下一节按钮失败：${error.message}`, 'error');
-                }
-            } else {
-                log('下一节按钮不存在或不可点击', 'error');
-                // 尝试重新获取按钮（应对按钮动态刷新的情况）
-                nextButtonElement = getTargetElement(NEXT_BUTTON_SELECTOR, '下一节按钮');
-                if (nextButtonElement) {
-                    nextButtonElement.click();
-                    log('重新获取按钮后点击成功');
-                }
+    function checkTaskStatus() {
+        checkCount++;
+        
+        // 检查是否达到最大检测次数
+        if (MAX_CHECK_TIMES > 0 && checkCount >= MAX_CHECK_TIMES) {
+            log(`已达到最大检测次数(${MAX_CHECK_TIMES})，停止检测`, 'warn');
+            clearInterval(checkTimer);
+            return;
+        }
+        
+        log(`正在检查任务点状态 (第${checkCount}次)`);
+        
+        // 检查任务点是否已完成
+        if (isTaskCompleted()) {
+            // 尝试点击下一节按钮
+            if (tryClickNextButton()) {
+                // 点击成功后，延迟一段时间再继续检测（防止重复点击）
+                clearInterval(checkTimer);
+                setTimeout(() => {
+                    log('重新开始检测任务点状态');
+                    checkTimer = setInterval(checkTaskStatus, CHECK_INTERVAL);
+                }, 10000);
             }
-        }, { once: false }); // once:false 确保多次播放结束都能触发（如视频重播后）
-
-        log('视频结束事件监听已启用');
+        } else {
+            log('任务点尚未完成，将继续检查');
+        }
     }
 
-    // -------------------------- 脚本入口 --------------------------
-    log('脚本开始执行，正在检测目标元素...');
-    initElementDetection();
+    /**
+     * 初始化脚本
+     */
+    function init() {
+        log('脚本开始执行，将定期检查任务点状态');
+        // 立即执行一次检查
+        checkTaskStatus();
+        // 设置定时检查
+        checkTimer = setInterval(checkTaskStatus, CHECK_INTERVAL);
+    }
+
+    // 启动脚本
+    init();
 
 })();
